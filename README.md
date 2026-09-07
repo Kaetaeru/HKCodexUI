@@ -220,6 +220,8 @@ V1에 넣지 않는다.
 - 완전한 IDE/코드 에디터
 - 브라우저 자동화
 
+이 목록은 **V1 범위 제한**이지 제품의 최종 한계가 아니다. 장기 제품 방향은 [`VISION.md`](./VISION.md)에 별도로 정의한다.
+
 ---
 
 ## 기술 방향
@@ -244,6 +246,7 @@ Codex App Server API는 버전에 따라 변할 수 있으므로 **지원 Codex 
 
 ---
 
-## 다음 문서
+## 문서
 
-세부 상태 머신, Task lifecycle, UI, 데이터 모델, 실패 복구, milestone과 V1 acceptance criteria는 [`PLAN.md`](./PLAN.md)에 정리한다.
+- [`VISION.md`](./VISION.md) — Claude 이상을 목표로 하는 장기 제품 방향과 기능 상한선
+- [`PLAN.md`](./PLAN.md) — V1 상태 머신, lifecycle, 데이터 모델, 실패 복구, milestone과 acceptance criteria
