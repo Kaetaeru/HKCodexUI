@@ -1,252 +1,285 @@
 # HKCodexUI
 
-> Codex를 **끝까지 일하는 코딩 에이전트**로 만드는 로컬 데스크톱 Workbench.
+> **Codex를 대화 상대가 아니라 끝까지 일하는 개발 Worker로 사용하는 local-first autonomous development workbench.**
 
-HKCodexUI는 Codex를 새로 만드는 프로젝트가 아니다.
+HKCodexUI는 Codex 자체를 다시 만드는 프로젝트가 아니다.
 
-**Codex는 코드 분석·설계·수정을 담당하고, HKCodexUI는 작업의 전체 수명주기를 관리한다.**
+- **Codex** — 코드 읽기, 판단, 수정, failure 분석
+- **HKCodexUI Supervisor** — Task 상태, workspace, 검증, Git, CI, 대기, 권한, 복구, 완료 판정
 
-사용자는 목표를 한 번 입력하고, HKCodexUI는 구현 → 검증 → Git → CI → 실패 수정 → 최종 검증을 실제 완료 조건이 만족될 때까지 이어간다.
+사용자는 개발 목표를 맡기고 중요한 예외만 처리한다.
+
+```text
+Goal
+ ↓
+HKCodexUI Task Contract
+ ↓
+Codex implementation
+ ↓
+Independent verification
+ ├─ FAIL → evidence → Codex repair
+ └─ PASS
+      ↓
+    Review
+      ↓
+   Commit / Push
+      ↓
+   CI / external wait
+ ├─ FAIL → evidence → Codex repair
+ └─ PASS
+      ↓
+ Acceptance evidence
+      ↓
+   COMPLETE
+```
+
+**Codex가 `Done`이라고 말하는 것은 완료 조건이 아니다.**
 
 ---
 
-## 왜 만드는가
+## 핵심 철학
 
-일반적인 코딩 에이전트는 다음과 같이 끝나기 쉽다.
+### Task > Chat
 
-```text
-사용자 요청
-   ↓
-Codex 작업
-   ↓
-"완료했습니다"
-   ↓
-끝
-```
-
-하지만 실제 개발 작업은 그 뒤에도 남아 있다.
-
-- 테스트가 정말 통과했는가?
-- push한 정확한 commit이 CI를 통과했는가?
-- CI가 실패하면 로그를 읽고 다시 고쳤는가?
-- 앱을 껐다 켜도 작업을 이어갈 수 있는가?
-- Codex가 완료했다고 말한 것이 아니라, 실제 acceptance criteria가 충족됐는가?
-
-HKCodexUI는 이 부분을 담당한다.
+Conversation은 Task를 수행하기 위한 인터페이스 중 하나다.
 
 ```text
-사용자 목표
-   ↓
-HKCodexUI Supervisor
-   ↓
-Codex 구현
-   ↓
-로컬 검증
-   ├─ 실패 → Codex에게 실패 증거 전달 → 수정
-   └─ 성공
-        ↓
-      Commit / Push
-        ↓
-      CI 대기
-   ├─ 실패 → 실패 로그 수집 → Codex 수정
-   └─ 성공
-        ↓
-   최종 Acceptance 검증
-        ↓
-      COMPLETE
+Project
+ └─ Task
+     ├─ Objective
+     ├─ Constraints
+     ├─ Acceptance Gates
+     ├─ Workspace
+     ├─ Agent Thread(s)
+     ├─ Verification
+     ├─ Git / PR / CI
+     ├─ Timeline
+     └─ Completion Evidence
 ```
 
-CI나 quota를 기다리는 동안에는 Codex를 호출하지 않는다.
-
----
-
-## 가장 중요한 원칙
-
-### 1. Codex는 Worker다
-
-Codex가 담당한다.
-
-- 저장소와 코드 이해
-- 구현 계획
-- 코드 수정
-- 테스트/CI 실패 원인 분석
-- 의미적 최종 리뷰
-
-### 2. HKCodexUI Supervisor가 작업의 주인이다
-
-Supervisor가 담당한다.
-
-- Task 상태 저장
-- 작업 재개
-- 로컬 검증 실행
-- Git 상태 확인
-- commit / push
-- GitHub Actions 관찰
-- 대기와 재개
-- retry/stagnation 관리
-- 실제 완료 여부 판정
-
-### 3. `Codex가 완료했다고 말함 != Task 완료`
-
-Task는 검증 가능한 증거가 모두 통과해야 완료된다.
-
-```text
-Local verification PASS
-+ expected commit == pushed commit
-+ required CI PASS
-+ acceptance gates PASS
-+ blocking review finding 없음
-= COMPLETE
-```
-
-### 4. 기다리는 것은 모델의 일이 아니다
-
-CI, rate limit, timer 등은 Supervisor가 기다린다.
+### 기다리는 동안 모델을 쓰지 않는다
 
 ```text
 CI running
-Codex state: sleeping
+Agent: sleeping
 Codex calls: 0
 ```
 
-이벤트가 발생했을 때만 Codex를 다시 깨운다.
+CI, PR review, quota, timer, webhook은 Supervisor가 기다리고 event가 생길 때만 Codex를 깨운다.
 
-### 5. 재시작해도 작업은 사라지지 않는다
+### 완료는 증거다
 
-Task, phase, commit SHA, verification 결과, CI run 등을 로컬 DB에 저장하고 앱 재실행 시 실제 Git/GitHub 상태와 대조해 이어간다.
+```text
+Local verification
+Exact candidate SHA/snapshot
+Remote SHA
+CI
+Review
+Acceptance gates
+Artifacts where applicable
+```
+
+### Crash가 Task를 끝내지 않는다
+
+앱/PC가 재시작되면 DB만 믿고 그대로 실행하지 않는다.
+
+```text
+Persisted state
++ actual worktree
++ actual Git SHA
++ remote SHA
++ CI/external state
+= reconciled next action
+```
+
+### 사람은 예외를 관리한다
+
+메인 UX의 가장 중요한 질문은 다음이다.
+
+> **내가 지금 뭘 해야 하는가?**
+
+장기적으로 `Needs You`가 모든 프로젝트의 중요한 decision/permission/blocker를 한곳에 모은다.
 
 ---
 
-## 사용자 경험
+## 제품 방향
 
-HKCodexUI의 중심은 `Chat`이 아니라 `Task`다.
+HKCodexUI는 단순 Codex UI보다 훨씬 넓은 제품을 목표로 한다.
+
+### H0 — Reliable Autonomous Core
 
 ```text
-┌ Projects ─────────────────────────────────────────────────┐
-│ SimpleVTT                                                 │
-├──────────────┬───────────────────────────┬────────────────┤
-│ TASKS        │ CURRENT TASK              │ STATE          │
-│              │                           │                │
-│ ● V1 release │ Complete SimpleVTT V1     │ ● CI           │
-│ ✓ auth fix   │                           │                │
-│ ✓ toolbar    │ Fixed MP-11 race          │ ✓ local        │
-│              │ Added regression test     │ ✓ pushed       │
-│              │                           │ ● GitHub CI    │
-│              │ Codex sleeping            │                │
-├──────────────┴───────────────────────────┴────────────────┤
-│ Chat │ Timeline │ Diff │ CI │ Gates │ Skills │ Settings   │
-└───────────────────────────────────────────────────────────┘
+Project onboarding / trust
+Codex App Server
+Durable Tasks
+isolated worktree
+local verification
+repair loop
+semantic review
+commit / push
+GitHub Actions
+exact-SHA completion
+crash recovery
+Skills / permissions
+Windows package
+```
+
+### H1 — Best Daily Driver
+
+```text
+Global Task Center / Needs You
+Project Brain
+Environment Doctor
+Verification Profiles
+Checkpoints / rewind
+Semantic Diff
+Command Palette
+Notifications / tray
+Universal Task Inbox
+Acceptance Compiler
+```
+
+### H2 — Long-running Workbench
+
+```text
+Task queue
+Overnight Mode
+quota-aware scheduler
+Watch Tasks
+PR Babysitter
+event triggers
+Task Graph
+Runbooks
+remote control over user-owned network
+```
+
+### H3 — Agent OS
+
+```text
+specialist agents
+cross-repository Tasks
+visual verification
+Release Workbench
+Artifact Center
+Task replay/export
+provider extension layer
+reliability/performance dashboard
+```
+
+상세 장기 아이디어는 [`VISION.md`](./VISION.md)에 있다.
+
+---
+
+## UI 방향
+
+채팅앱보다 **Task 운영 콘솔**에 가깝다.
+
+```text
+┌──────────────── HKCodexUI ────────────────────────────────────────┐
+│ Needs You 2   Working 3   Waiting 2        Search / Ctrl+K        │
+├────────────┬──────────────────────────┬─────────────────────────────┤
+│ PROJECTS   │ TASKS                    │ TASK DETAIL                 │
+│            │                          │                             │
+│ SimpleVTT  │ ! Auth bug              │ Auth bug                    │
+│ HKCodexUI  │ ● Release V1            │ Build · local_verify        │
+│ StayOps    │ ◐ Dependency upgrade    │                             │
+│            │ ✓ Toolbar fix            │ Next: run full test suite   │
+├────────────┴──────────────────────────┴─────────────────────────────┤
+│ Overview | Chat | Timeline | Diff | Tests | CI | Gates | Skills   │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 사용자는 항상 다음을 알 수 있어야 한다.
 
-1. 지금 무엇을 하고 있는가?
-2. Codex가 실제로 일하는 중인가, 대기 중인가?
-3. 무엇이 통과했고 무엇이 실패했는가?
-4. 왜 멈췄는가?
-5. 완료까지 무엇이 남았는가?
-
----
-
-## 실행 모드
-
-### Chat
-
-일반적인 Codex 대화와 단발성 작업.
-
-### Autopilot
-
-구현 → 로컬 검증 → 실패 수정까지 자동 반복.
-
-### Ship
-
-Autopilot에 더해 다음까지 관리한다.
-
-- 격리 작업공간
-- commit
-- push
-- GitHub Actions 대기
-- CI 실패 자동 수정
-- 최종 acceptance 검증
-
-위험도가 높은 동작은 별도 권한으로 관리한다.
-
 ```text
-자동 허용 가능
-- task workspace 읽기/쓰기
-- test/build/lint 실행
-- git diff/status
-
-Supervisor 전용
-- commit
-- push
-
-기본적으로 사용자 승인 필요
-- force push
-- merge
-- release / publish
-- workspace 밖의 파괴적 변경
+지금 무엇을 하는가?
+Codex가 active인가 sleeping인가?
+왜 기다리는가?
+무엇이 실패했는가?
+내가 개입해야 하는가?
+완료까지 무엇이 남았는가?
 ```
 
 ---
 
-## V1 목표
-
-> 사용자가 GitHub 저장소에 대한 코딩 목표를 입력하면, HKCodexUI가 Codex에게 구현시키고 로컬 테스트 및 GitHub CI 실패를 자동으로 되돌려주며, 모든 필수 검증이 통과한 정확한 commit SHA가 remote에 존재할 때까지 작업을 지속할 수 있다.
-
-V1에 포함한다.
-
-- Windows-first desktop app
-- Codex App Server 연동
-- 프로젝트 열기
-- Task 생성/저장/재개
-- Chat + 진행 이벤트 표시
-- Skills 조회/활성화 관리
-- 격리된 Git worktree
-- 로컬 verification loop
-- commit / push
-- GitHub Actions wait/repair loop
-- acceptance gates
-- crash recovery
-- 명확한 approval 정책
-
-V1에 넣지 않는다.
-
-- 여러 코딩 모델 지원
-- 복잡한 멀티에이전트 orchestration
-- 자동 merge
-- 자동 release/publish
-- cloud runner
-- 완전한 IDE/코드 에디터
-- 브라우저 자동화
-
-이 목록은 **V1 범위 제한**이지 제품의 최종 한계가 아니다. 장기 제품 방향은 [`VISION.md`](./VISION.md)에 별도로 정의한다.
-
----
-
-## 기술 방향
+## H0 기술 방향
 
 ```text
 Electron + React + TypeScript
           │
           ▼
+      Electron Main
+          │
       Supervisor
    ├─ Task Engine
+   ├─ Scheduler
    ├─ Codex Adapter
    ├─ Verification Engine
    ├─ Git Manager
    ├─ GitHub/CI Watcher
-   └─ Recovery Store (SQLite)
+   ├─ Approval Engine
+   ├─ Recovery Engine
+   └─ SQLite
           │
           ▼
  codex app-server --stdio
 ```
 
-Codex App Server API는 버전에 따라 변할 수 있으므로 **지원 Codex 버전을 pin**하고, 해당 버전의 `codex app-server generate-ts`로 생성한 schema를 기준으로 Adapter를 구현한다.
+Renderer는 shell/Git/Codex/DB를 직접 실행하지 않는다.
+
+H0 Codex App Server tested baseline은 `0.153.4`. stable protocol surface를 우선하고 experimental API에 핵심 correctness를 의존하지 않는다.
 
 ---
 
-## 문서
+# 구현을 시작하는 Codex에게
 
-- [`VISION.md`](./VISION.md) — Claude 이상을 목표로 하는 장기 제품 방향과 기능 상한선
-- [`PLAN.md`](./PLAN.md) — V1 상태 머신, lifecycle, 데이터 모델, 실패 복구, milestone과 acceptance criteria
+이 저장소는 이제 단순 아이디어 문서가 아니라 **실행 가능한 구현 계약**을 가진다.
+
+먼저 [`AGENTS.md`](./AGENTS.md)를 읽는다.
+
+그 다음:
+
+```text
+1. SPEC.md
+2. ARCHITECTURE.md
+3. ROADMAP.md
+4. PLAN.md
+5. VISION.md
+6. README.md
+```
+
+순으로 읽는다.
+
+현재 handoff는 [`STATUS.md`](./STATUS.md)에 있다.
+
+현재 Next Exact Action:
+
+> **`ROADMAP.md`의 `WP-00 — Repository Bootstrap`부터 구현한다.**
+
+---
+
+## 문서 역할
+
+| Document | 역할 |
+|---|---|
+| [`AGENTS.md`](./AGENTS.md) | Codex/코딩 에이전트 실행 규칙 |
+| [`SPEC.md`](./SPEC.md) | **제품 동작의 canonical source of truth** |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | **기술 구조·DB·IPC·프로세스의 canonical contract** |
+| [`ROADMAP.md`](./ROADMAP.md) | **Work Packet 구현 순서·테스트·release gates** |
+| [`STATUS.md`](./STATUS.md) | 현재 구현 handoff / next WP |
+| [`PLAN.md`](./PLAN.md) | 초기 H0/V1 lifecycle 설명 |
+| [`VISION.md`](./VISION.md) | Claude 이상을 목표로 하는 장기 제품 방향 |
+
+문서가 충돌하면 제품 동작은 `SPEC.md`, 기술 경계는 `ARCHITECTURE.md`, 구현 순서는 `ROADMAP.md`가 우선한다.
+
+---
+
+## 현재 상태
+
+```text
+Planning / specification     READY
+Application implementation  NOT STARTED
+Next                         WP-00
+```
+
+즉 지금부터는 제품 기획을 다시 발명하는 단계가 아니라, Work Packet을 하나씩 구현하고 실제 acceptance를 통과시키는 단계다.
